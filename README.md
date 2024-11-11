@@ -21,7 +21,7 @@ metadata
 - TransactionID: Unique ID of this transaction
 - AccountID: Account associated with the transaction
 - Amount: Amount of the transaction
-- Category: Transaction category (example: food, rent, etc); this is encoded.
+- Category: Transaction category (example: food, rent, etc)
 - Vendor: Transaction vendor (example: McDonalds, Ubet, etc)
 - DistanceFromLastTransaction: How far are we from the last transaction associated with this account
 - TimeFromLastTransaction: How much time has passed between this and the last transaction associated with this account
