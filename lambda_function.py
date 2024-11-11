@@ -201,9 +201,6 @@ def insert_dynamodb(transaction, prediction):
 
         category = transaction_data["transactionCategory"]
 
-        # pass encoded category into dynamodb, then decode it during read
-        encoded_category = label_encoder.transform([category])[0]
-
         distance_from_previous = metadata["distanceFromPrevious"]
         time_from_last_transacton = metadata["timeSinceLastTransaction"]
 
@@ -211,7 +208,7 @@ def insert_dynamodb(transaction, prediction):
             "TransactionID": transaction_id,
             "AccountID": account_id,
             "Amount": amount,
-            "Category": encoded_category,
+            "Category": category,
             "Vendor": vendor, 
             "DistanceFromLastTransaction": distance_from_previous,
             "TimeFromLastTransaction": time_from_last_transacton,
