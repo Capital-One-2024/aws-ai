@@ -9,6 +9,9 @@ import pytz
 # Initialize S3 client
 s3 = boto3.client('s3')
 
+# Initialize DynamoDB resource
+dynamodb = boto3.resource('dynamodb')
+
 # Environment Variables
 BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
 MODEL_KEY = os.environ.get("S3_MODEL_KEY")
@@ -20,6 +23,7 @@ LOCAL_LABEL_ENCODER_PATH = os.environ.get("LOCAL_LABEL_ENCODER_PATH")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
 SEND_EMAILS_WHEN_FRAUD = os.environ.get("SEND_EMAILS_WHEN_FRAUD")
 SEND_EMAILS_WHEN_NOT_FRAUD = os.environ.get("SEND_EMAILS_WHEN_NOT_FRAUD")
+TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME")
 
 def download_model():
     # Download the model, scaler, and label encoder to the Lambda
@@ -66,6 +70,9 @@ def handler(event, context):
             for i, prediction in enumerate(predictions):
                 t = transactions[i]
                 process_prediction(t, prediction)
+
+                # insert this data into dynamodb
+                insert_into_dynamodb(t, prediction)
         else:
             print("No features extracted from transactions.")
 
@@ -170,3 +177,51 @@ def process_prediction(transaction, prediction):
         print(f"Failed to process prediction. {err}")
         raise err
 
+def insert_dynamodb(transaction, prediction):
+    # Define the table
+    table = dynamodb.Table(TABLE_NAME)
+
+    try:
+        body = getBody(transaction)
+
+        customer_data = body["customer"]
+        transaction_data = body["transaction"]
+        metadata = body["metadata"]
+
+        account_id = customer_data["accountID"]
+
+        transaction_id = customer_data["transactionID"]
+        amount = transaction_data["amount"]
+
+        # assuming we pass vendor here, see README
+        vendor = transaction_data["vendor"]
+
+        timestamp = transaction_data["timestamp"]
+        date_time = format_timestamp(timestamp)
+
+        category = transaction_data["transactionCategory"]
+
+        # pass encoded category into dynamodb, then decode it during read
+        encoded_category = label_encoder.transform([category])[0]
+
+        distance_from_previous = metadata["distanceFromPrevious"]
+        time_from_last_transacton = metadata["timeSinceLastTransaction"]
+
+        item = {
+            "TransactionID": transaction_id,
+            "AccountID": account_id,
+            "Amount": amount,
+            "Category": encoded_category,
+            "Vendor": vendor, 
+            "DistanceFromLastTransaction": distance_from_previous,
+            "TimeFromLastTransaction": time_from_last_transacton,
+            "DateTime": date_time,
+            "Prediction": prediction,
+            "PredictionAccurate": 0
+        }
+    
+        print(f"Inserting into DynamoDB prediction: {prediction} for Account #{account_id} with ${amount} on {date_time}")
+        response = table.put_item(Item=item)
+    except Exception as err:
+        print(f"Failed to insert into DynamoDB. {err}")
+        raise err
