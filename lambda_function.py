@@ -21,6 +21,10 @@ LOCAL_MODEL_PATH = os.environ.get("LOCAL_MODEL_PATH")
 LOCAL_SCALER_PATH = os.environ.get("LOCAL_SCALER_PATH")
 LOCAL_LABEL_ENCODER_PATH = os.environ.get("LOCAL_LABEL_ENCODER_PATH")
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
+
+# once SES TOPIC ARN is setup, please remove comment, and uncomment the
+# code below I commented since I didn't want any possible errors
+SES_SOURCE_EMAIL = os.environ.get("SES_SOURCE_EMAIL")
 SEND_EMAILS_WHEN_FRAUD = os.environ.get("SEND_EMAILS_WHEN_FRAUD")
 SEND_EMAILS_WHEN_NOT_FRAUD = os.environ.get("SEND_EMAILS_WHEN_NOT_FRAUD")
 TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME")
@@ -137,33 +141,136 @@ def format_timestamp(timestamp):
     chicago_tz = pytz.timezone("America/Chicago")
     return datetime.fromtimestamp(int(timestamp), chicago_tz).strftime("%b %d, %Y at %I:%M %p")
 
-def send_notification(account_id, amount, date_time, is_fraudulent):
-    sns_subject = ""
-    sns_message = ""
+ses_client = boto3.client("ses")
+SES_SOURCE_EMAIL = os.environ.get("SES_SOURCE_EMAIL")  # Your verified email in SES
+
+def send_email(subject, body, recipient_email):
+    """
+    Sends an email using Amazon SES.
+    """
+    try:
+        response = ses_client.send_email(
+            Source=SES_SOURCE_EMAIL,
+            Destination={"ToAddresses": [recipient_email]},
+            Message={
+                "Subject": {"Data": subject},
+                "Body": {"Html": {"Data": body}}
+            },
+        )
+        print(f"Email sent successfully to {recipient_email}.")
+        return response
+    except Exception as e:
+        print(f"Failed to send email. {e}")
+        raise e
+
+
+def send_notification(account_id, amount, date_time, is_fraudulent, recipient_email):
+    """
+    Sends a notification email using SES based on transaction details.
+    """
+    subject = ""
+    body = ""
 
     if is_fraudulent:
-        # Check if we should send email notifications for fraudulent transactions
+        # Check if email notifications for fraudulent transactions are enabled
         if SEND_EMAILS_WHEN_FRAUD == "false":
             return
         print("Sending Fraud Alert")
-        sns_subject = "Capital One - Fraud Alert"
-        sns_message = f"Capital One\nAccount #{account_id}: A fraudulent transaction of ${amount} was detected on {date_time}!"
+
+        subject = "Capital One - Fraud Alert"
+        body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f9f9f9; }}
+                .email-container {{ max-width: 600px; margin: auto; background: #fff; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }}
+                .header {{ text-align: center; padding: 20px; }}
+                .header img {{ max-width: 150px; }}
+                .title-bar {{ background: #d32f2f; color: #fff; padding: 10px 15px; text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 20px; }}
+                .content {{ padding: 20px; font-size: 16px; color: #333; line-height: 1.6; }}
+                .footer {{ padding: 10px; font-size: 12px; text-align: center; color: #999; border-top: 1px solid #ddd; margin-top: 20px; }}
+            </style>
+        </head>
+        <body>
+            <div class="email-container">
+                <div class="header">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/Capital_One_logo.svg/1200px-Capital_One_logo.svg.png" alt="Capital One Logo">
+                </div>
+                <div class="title-bar">Security Alert, Suspicious Activity Detected</div>
+                
+                <div class="content">
+                    <p>Dear Customer,</p>
+                    <p>We have detected a suspicious transaction on your account, which could indicate potential fraud. Please review the details below:</p>
+                    <ul>
+                        <li><b>Transaction Amount:</b> ${amount}</li>
+                        <li><b>Transaction Location:</b> New York, NY</li>
+                        <li><b>Transaction Date:</b> {date_time}</li>
+                    </ul>
+                    <p>For your protection, Capital One Security has temporarily blocked this transaction to safeguard your account. If this transaction is valid, you can approve it to proceed; otherwise, we recommend securing your account immediately.</p>
+                    <p>If this transaction was not made by you, we strongly recommend taking immediate action to secure your account.</p>
+                    <p>Thank you for your prompt attention to this matter.</p>
+                    <p>Regards,</p>
+                    <p>Capital One Security Team</p>
+                </div>
+                <div class="footer">
+                    This is an automated email. Please do not reply.
+                </div>
+            </div>
+        </body>
+        </html>
+        """
     else:
-        # Check if we should send email notifications for non-fraudulent transactions
+        # Check if email notifications for non-fraudulent transactions are enabled
         if SEND_EMAILS_WHEN_NOT_FRAUD == "false":
             return
-
         print("Sending Transaction Alert")
-        sns_subject = "Capital One - New Transaction"
-        sns_message = f"Capital One\nAccount #{account_id}: Your ${amount} transaction on {date_time} was processed successfully!"
 
-    # Send the notification
-    return sns_client.publish(
-        TopicArn=SNS_TOPIC_ARN,
-        Subject=sns_subject,
-        Message=sns_message
-    )
+        subject = "Capital One - New Transaction"
+        body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f9f9f9; }}
+                .email-container {{ max-width: 600px; margin: auto; background: #fff; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }}
+                .header {{ text-align: center; padding: 20px; }}
+                .header img {{ max-width: 150px; }}
+                .title-bar {{ background: #004878; color: #fff; padding: 10px 15px; text-align: center; font-size: 24px; font-weight: bold; margin-bottom: 20px; }}
+                .content {{ padding: 20px; font-size: 16px; color: #333; line-height: 1.6; }}
+                .footer {{ padding: 10px; font-size: 12px; text-align: center; color: #999; border-top: 1px solid #ddd; margin-top: 20px; }}
+            </style>
+        </head>
+        <body>
+            <div class="email-container">
+                <div class="header">
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/9/98/Capital_One_logo.svg/1200px-Capital_One_logo.svg.png" alt="Capital One Logo">
+                </div>
+                <div class="title-bar">Transaction Successful</div>
+                
+                <div class="content">
+                    <p>Dear Customer,</p>
+                    <p>We are pleased to inform you that your recent transaction was successfully processed. Here are the details of the transaction:</p>
+                    <ul>
+                        <li><b>Transaction Amount:</b> ${amount}</li>
+                        <li><b>Transaction Location:</b> New York, NY</li>
+                        <li><b>Transaction Date:</b> {date_time}</li>
+                    </ul>
+                    <p>If you recognize this transaction, no further action is required. If you have any questions or concerns, please don’t hesitate to contact our support team.</p>
+                    <p>Thank you for choosing Capital One for your financial needs.</p>
+                    <p>Regards,</p>
+                    <p>Capital One Customer Service Team</p>
+                </div>
+                <div class="footer">
+                    This is an automated email. Please do not reply.
+                </div>
+            </div>
+        </body>
+        </html>
+        """
 
+    # Send the email using SES
+    return send_email(subject, body, recipient_email)
+
+# please adjust the process_prediction with the new SES accordingly
 def process_prediction(transaction, prediction):
     try:
         body = getBody(transaction)
