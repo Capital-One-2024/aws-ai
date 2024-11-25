@@ -164,7 +164,8 @@ def send_email(subject, body, recipient_email):
         raise e
 
 
-def send_notification(account_id, amount, date_time, is_fraudulent, recipient_email):
+# userID, amount, time, longitude, latitude, is_fraudulent
+def send_notification(userID, amount, time, longitude, latitude, is_fraudulent, email):
     """
     Sends a notification email using SES based on transaction details.
     """
@@ -203,8 +204,8 @@ def send_notification(account_id, amount, date_time, is_fraudulent, recipient_em
                     <p>We have detected a suspicious transaction on your account, which could indicate potential fraud. Please review the details below:</p>
                     <ul>
                         <li><b>Transaction Amount:</b> ${amount}</li>
-                        <li><b>Transaction Location:</b> New York, NY</li>
-                        <li><b>Transaction Date:</b> {date_time}</li>
+                        <li><b>Transaction Location:</b>{ latitude, longitude }</li>
+                        <li><b>Transaction Date:</b> {time}</li>
                     </ul>
                     <p>For your protection, Capital One Security has temporarily blocked this transaction to safeguard your account. If this transaction is valid, you can approve it to proceed; otherwise, we recommend securing your account immediately.</p>
                     <p>If this transaction was not made by you, we strongly recommend taking immediate action to secure your account.</p>
@@ -251,8 +252,8 @@ def send_notification(account_id, amount, date_time, is_fraudulent, recipient_em
                     <p>We are pleased to inform you that your recent transaction was successfully processed. Here are the details of the transaction:</p>
                     <ul>
                         <li><b>Transaction Amount:</b> ${amount}</li>
-                        <li><b>Transaction Location:</b> New York, NY</li>
-                        <li><b>Transaction Date:</b> {date_time}</li>
+                        <li><b>Transaction Location:</b> { latitude, longitude } </li>
+                        <li><b>Transaction Date:</b> {time}</li>
                     </ul>
                     <p>If you recognize this transaction, no further action is required. If you have any questions or concerns, please don’t hesitate to contact our support team.</p>
                     <p>Thank you for choosing Capital One for your financial needs.</p>
@@ -268,18 +269,26 @@ def send_notification(account_id, amount, date_time, is_fraudulent, recipient_em
         """
 
     # Send the email using SES
-    return send_email(subject, body, recipient_email)
+    return send_email(subject, body, email)
 
 # please adjust the process_prediction with the new SES accordingly
 def process_prediction(transaction, prediction):
     try:
         body = getBody(transaction)
-        account_id = body["customer"]["accountID"]
+        userID = body["transaction"]["userID"]
+        # how to extract email?
+        # const [userDetails, setUserDetails] = useState<FetchUserAttributesOutput>();
+        email = body["transaction"]["email"] # temporary placeholder
         amount = body["transaction"]["amount"]
-        timestamp = body["transaction"]["timestamp"]
-        date_time = format_timestamp(timestamp)
-        print(f"Processing Prediction: {prediction} for Account #{account_id} with ${amount} on {date_time}")
-        send_notification(account_id, amount, date_time, prediction == -1)
+        time = body["transaction"]["createdAt"]
+        vendor = body["transaction"]["vendor"]
+        category = body["transaction"]["transactionCategory"]
+        longitude = body["transaction"]["longitude"]
+        latitude = body["transaction"]["latitude"]
+        is_fraudulent = prediction == -1  # Fraud detection result
+
+        print(f"Processing Prediction: {prediction} for Account #{userID} with ${amount} on {time} location ({latitude}, {longitude}) by vendor {vendor} in category {category}.")
+        send_notification(userID, amount, time, longitude, latitude, is_fraudulent, email)
     except Exception as err:
         print(f"Failed to process prediction. {err}")
         raise err
