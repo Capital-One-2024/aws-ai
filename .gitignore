@@ -24,3 +24,6 @@
 
 # Virtual environment
 **/venv/
+
+dataset/*.png
+dataset/*.csv

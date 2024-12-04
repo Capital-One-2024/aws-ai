@@ -9,9 +9,6 @@ import pytz
 # Initialize S3 client
 s3 = boto3.client('s3')
 
-# Initialize DynamoDB resource
-dynamodb = boto3.resource('dynamodb')
-
 # Environment Variables
 BUCKET_NAME = os.environ.get("S3_BUCKET_NAME")
 MODEL_KEY = os.environ.get("S3_MODEL_KEY")
@@ -20,10 +17,6 @@ LABEL_ENCODER_KEY = os.environ.get("S3_LABEL_ENCODER_KEY")
 LOCAL_MODEL_PATH = os.environ.get("LOCAL_MODEL_PATH")
 LOCAL_SCALER_PATH = os.environ.get("LOCAL_SCALER_PATH")
 LOCAL_LABEL_ENCODER_PATH = os.environ.get("LOCAL_LABEL_ENCODER_PATH")
-SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
-SEND_EMAILS_WHEN_FRAUD = os.environ.get("SEND_EMAILS_WHEN_FRAUD")
-SEND_EMAILS_WHEN_NOT_FRAUD = os.environ.get("SEND_EMAILS_WHEN_NOT_FRAUD")
-TABLE_NAME = os.environ.get("DYNAMODB_TABLE_NAME")
 
 def download_model():
     # Download the model, scaler, and label encoder to the Lambda
@@ -41,16 +34,14 @@ def load_model():
     label_encoder = joblib.load(LOCAL_LABEL_ENCODER_PATH)
     return model, scaler, label_encoder
 
-# Initialize SNS client
-sns_client = boto3.client("sns")
-
 # Load the model, scaler, and encoder during initialization
 model, scaler, label_encoder = load_model()
 
 def handler(event, context):
     try:
-        transactions = event["Records"]
+        transactions = event["transactions"]
         all_features = []
+        all_predictions = []
 
         # Extract features from each transaction
         for transaction in transactions:
@@ -68,18 +59,17 @@ def handler(event, context):
 
             # Process the predictions
             for i, prediction in enumerate(predictions):
-                t = transactions[i]
-                process_prediction(t, prediction)
-
-                # insert this data into dynamodb
-                insert_into_dynamodb(t, prediction)
+                transaction = transactions[i]
+                is_fraudulent = True if prediction == -1 else False
+                all_predictions.append({
+                    "id": transaction["id"],
+                    "isFraudulent": is_fraudulent,
+                })
+                
         else:
             print("No features extracted from transactions.")
-
-        return {
-            'statusCode': 200,
-            'body': json.dumps('Transactions Processed!')
-        }
+            
+        return {"predictions": all_predictions}
     except Exception as err:
         errMsg = err.args
         return {
@@ -87,32 +77,25 @@ def handler(event, context):
             'body': json.dumps(errMsg)
         }
 
-def getBody(transaction):
-    return json.loads(transaction["body"])
-
 def extract_features_from_transaction(transaction):
-    try:
-        body = getBody(transaction)
-
-        customer_data = body["customer"]
-        transaction_data = body["transaction"]
-        metadata = body["metadata"]
-
+    try:                
         # Encode transaction category using the loaded label encoder
-        category = transaction_data["transactionCategory"]
+        category = transaction["category"]
         encoded_category = label_encoder.transform([category])[0]
-
+        
         # Extract day of the week and hour from the timestamp
-        timestamp = int(transaction_data["timestamp"])
-        date_time = datetime.fromtimestamp(timestamp)
-        day_of_week = date_time.weekday()  # 0 = Monday, 6 = Sunday
-        hour_of_day = date_time.hour
+        timestamp = int(transaction["timestamp"]) / 1000  # Convert milliseconds to seconds
+        utc_time = utc_time = datetime.fromtimestamp(timestamp, tz=pytz.utc)
+        local_time = utc_time.astimezone(pytz.timezone("America/Chicago"))
+                
+        day_of_week = local_time.weekday()  # 0 = Monday, 6 = Sunday
+        hour_of_day = local_time.hour
 
         # Calculate the speed feature
-        speed = metadata["distanceFromPrevious"] / (metadata["timeSinceLastTransaction"] + 1)
-
+        speed = transaction["distanceFromPreviousTransaction"] / (transaction["timeSinceLastTransaction"] + 1)
+        
         return {
-            "Amount": transaction_data["amount"],
+            "Amount": transaction["amount"],
             "Speed": speed,
             "day_of_week": day_of_week,
             "hour_of_day": hour_of_day,
@@ -136,89 +119,3 @@ def fraud_predictor(df):
 def format_timestamp(timestamp):
     chicago_tz = pytz.timezone("America/Chicago")
     return datetime.fromtimestamp(int(timestamp), chicago_tz).strftime("%b %d, %Y at %I:%M %p")
-
-def send_notification(account_id, amount, date_time, is_fraudulent):
-    sns_subject = ""
-    sns_message = ""
-
-    if is_fraudulent:
-        # Check if we should send email notifications for fraudulent transactions
-        if SEND_EMAILS_WHEN_FRAUD == "false":
-            return
-        print("Sending Fraud Alert")
-        sns_subject = "Capital One - Fraud Alert"
-        sns_message = f"Capital One\nAccount #{account_id}: A fraudulent transaction of ${amount} was detected on {date_time}!"
-    else:
-        # Check if we should send email notifications for non-fraudulent transactions
-        if SEND_EMAILS_WHEN_NOT_FRAUD == "false":
-            return
-
-        print("Sending Transaction Alert")
-        sns_subject = "Capital One - New Transaction"
-        sns_message = f"Capital One\nAccount #{account_id}: Your ${amount} transaction on {date_time} was processed successfully!"
-
-    # Send the notification
-    return sns_client.publish(
-        TopicArn=SNS_TOPIC_ARN,
-        Subject=sns_subject,
-        Message=sns_message
-    )
-
-def process_prediction(transaction, prediction):
-    try:
-        body = getBody(transaction)
-        account_id = body["customer"]["accountID"]
-        amount = body["transaction"]["amount"]
-        timestamp = body["transaction"]["timestamp"]
-        date_time = format_timestamp(timestamp)
-        print(f"Processing Prediction: {prediction} for Account #{account_id} with ${amount} on {date_time}")
-        send_notification(account_id, amount, date_time, prediction == -1)
-    except Exception as err:
-        print(f"Failed to process prediction. {err}")
-        raise err
-
-def insert_dynamodb(transaction, prediction):
-    # Define the table
-    table = dynamodb.Table(TABLE_NAME)
-
-    try:
-        body = getBody(transaction)
-
-        customer_data = body["customer"]
-        transaction_data = body["transaction"]
-        metadata = body["metadata"]
-
-        account_id = customer_data["accountID"]
-
-        transaction_id = customer_data["transactionID"]
-        amount = transaction_data["amount"]
-
-        # assuming we pass vendor here, see README
-        vendor = transaction_data["vendor"]
-
-        timestamp = transaction_data["timestamp"]
-        date_time = format_timestamp(timestamp)
-
-        category = transaction_data["transactionCategory"]
-
-        distance_from_previous = metadata["distanceFromPrevious"]
-        time_from_last_transacton = metadata["timeSinceLastTransaction"]
-
-        item = {
-            "TransactionID": transaction_id,
-            "AccountID": account_id,
-            "Amount": amount,
-            "Category": category,
-            "Vendor": vendor, 
-            "DistanceFromLastTransaction": distance_from_previous,
-            "TimeFromLastTransaction": time_from_last_transacton,
-            "DateTime": date_time,
-            "Prediction": prediction,
-            "PredictionAccurate": 0
-        }
-    
-        print(f"Inserting into DynamoDB prediction: {prediction} for Account #{account_id} with ${amount} on {date_time}")
-        response = table.put_item(Item=item)
-    except Exception as err:
-        print(f"Failed to insert into DynamoDB. {err}")
-        raise err
